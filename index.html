@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Rick and Morty · Panel</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- ============ AUTH SHELL ============ -->
+  <main id="authShell" class="auth-shell" aria-live="polite">
+    <div class="auth-card">
+      <header class="auth-head">
+        <h1 class="brand">Rick <span>&</span> Morty</h1>
+        <p class="brand-sub">Panel interdimensional</p>
+        <button id="authThemeToggle" class="theme-btn" type="button" aria-label="Cambiar tema">🌓</button>
+      </header>
+
+      <nav class="auth-tabs" role="tablist">
+        <button class="tab active" data-view="login" role="tab">Iniciar sesión</button>
+        <button class="tab" data-view="register" role="tab">Registro</button>
+      </nav>
+
+      <!-- Login -->
+      <form id="loginForm" class="auth-form" data-form="login" novalidate>
+        <label>Correo
+          <input type="email" name="email" required autocomplete="email" placeholder="rick@c137.com" />
+        </label>
+        <label>Contraseña
+          <input type="password" name="password" required minlength="4" placeholder="••••••••" />
+        </label>
+        <button type="submit" class="primary">Entrar al portal</button>
+        <button type="button" class="link-btn" id="forgotBtn">¿Olvidé mi contraseña?</button>
+        <p class="hint">Demo: cualquier usuario registrado funciona. Sin registro previo: <code>demo@rm.com / demo1234</code></p>
+        <p class="msg" data-msg></p>
+      </form>
+
+      <!-- Register -->
+      <form id="registerForm" class="auth-form hidden" data-form="register" novalidate>
+        <label>Nombre
+          <input type="text" name="name" required placeholder="Morty Smith" />
+        </label>
+        <label>Correo
+          <input type="email" name="email" required placeholder="tu@correo.com" />
+        </label>
+        <label>Contraseña
+          <input type="password" name="password" required minlength="4" />
+        </label>
+        <label>Confirmar contraseña
+          <input type="password" name="confirm" required minlength="4" />
+        </label>
+        <button type="submit" class="primary">Crear cuenta</button>
+        <p class="hint">Usa mínimo 4 caracteres. Demo rápido: <code>demo@rm.com / demo1234</code></p>
+        <p class="msg" data-msg></p>
+      </form>
+    </div>
+  </main>
+
+  <!-- ============ APP SHELL ============ -->
+  <div id="appShell" class="app-shell hidden">
+    <header class="app-header">
+      <div class="app-brand">
+        <span class="portal" aria-hidden="true"></span>
+        <h1>Rick <span>&</span> Morty <small>Panel</small></h1>
+      </div>
+      <nav class="app-nav" role="tablist">
+        <button class="nav-btn active" data-tab="characters" role="tab">Personajes</button>
+        <button class="nav-btn" data-tab="episodes" role="tab">Episodios</button>
+      </nav>
+      <div class="app-actions">
+        <button id="offlineToggle" class="ghost offline-btn" type="button" title="Simular sin conexión">📶 Internet: ON</button>
+        <span id="netStatus" class="net-badge" title="Estado de conexión">•</span>
+        <button id="themeToggle" class="theme-btn" type="button" aria-label="Cambiar tema">🌓</button>
+        <span id="userChip" class="user-chip"></span>
+        <button id="logoutBtn" class="ghost">Salir</button>
+      </div>
+    </header>
+
+    <!-- Characters -->
+    <section id="tab-characters" class="tab-panel active">
+      <div class="toolbar">
+        <input id="searchCharacters" type="search" placeholder="Buscar personaje por nombre…" aria-label="Buscar personaje" />
+        <span class="counter" id="counterCharacters">0</span>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="tableCharacters">
+          <thead>
+            <tr>
+              <th data-sort="id">ID</th>
+              <th data-sort="name">Nombre</th>
+              <th data-sort="species">Especie</th>
+              <th data-sort="gender">Género</th>
+              <th data-sort="type">Tipo</th>
+              <th aria-label="Acciones"></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty hidden" data-empty>Sin resultados.</p>
+      </div>
+    </section>
+
+    <!-- Episodes -->
+    <section id="tab-episodes" class="tab-panel">
+      <div class="toolbar">
+        <input id="searchEpisodes" type="search" placeholder="Buscar episodio por nombre…" aria-label="Buscar episodio" />
+        <span class="counter" id="counterEpisodes">0</span>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="tableEpisodes">
+          <thead>
+            <tr>
+              <th data-sort="id">ID</th>
+              <th data-sort="name">Nombre</th>
+              <th data-sort="air_date">Fecha de emisión</th>
+              <th data-sort="episode">Código</th>
+              <th aria-label="Acciones"></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p class="empty hidden" data-empty>Sin resultados.</p>
+      </div>
+    </section>
+
+    <footer class="app-footer">
+      <small>Datos: rickandmortyapi.com · Modo offline con LocalStorage</small>
+    </footer>
+  </div>
+
+  <!-- ============ MODAL ============ -->
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card">
+      <header class="modal-head">
+        <h2 id="modalTitle">Detalle</h2>
+        <button class="ghost" data-close aria-label="Cerrar">✕</button>
+      </header>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+
+  <!-- ============ TOAST ============ -->
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
