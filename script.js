@@ -98,18 +98,28 @@
 
   // ---------- Data layer ----------
   const API = "https://rickandmortyapi.com/api";
-  const fetchAllPages = async (endpoint) => {
-    let url = `${API}/${endpoint}`;
-    const all = [];
-    while (url) {
-      if (!isOnline()) throw new Error("Sin conexión");
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      all.push(...(data.results || []));
-      url = data.info?.next || null;
-    }
-    return all;
+  // Trae la primera página y, en paralelo, el resto. Mucho más rápido que
+  // encadenar next → next → next secuencialmente (que causaba timeouts en la
+  // primera carga con ~42 páginas de personajes).
+  const fetchJson = async (url) => {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  };
+  const fetchAllPages = async (endpoint, onFirstPage) => {
+    if (!isOnline()) throw new Error("Sin conexión");
+    const first = await fetchJson(`${API}/${endpoint}?page=1`);
+    const results = [...(first.results || [])];
+    const totalPages = first.info?.pages || 1;
+    if (typeof onFirstPage === "function") onFirstPage(results.slice());
+    if (totalPages <= 1) return results;
+    const rest = await Promise.all(
+      Array.from({ length: totalPages - 1 }, (_, i) =>
+        fetchJson(`${API}/${endpoint}?page=${i + 2}`).then(d => d.results || []),
+      ),
+    );
+    for (const chunk of rest) results.push(...chunk);
+    return results;
   };
   const mergeWithLocalEdits = (localList, apiList) => {
     const editedById = new Map((localList || []).filter(r => r.__edited).map(r => [r.id, r]));
@@ -129,7 +139,10 @@
       return cached;
     }
     if (!isOnline()) throw new Error("Sin conexión y sin datos en caché.");
-    const fresh = await fetchAllPages(endpoint);
+    // Render inmediato con la primera página; el resto llega en segundo plano.
+    const fresh = await fetchAllPages(endpoint, (partial) => {
+      if (typeof onRefresh === "function") onRefresh(partial);
+    });
     store.set(key, fresh);
     return fresh;
   };
@@ -182,8 +195,14 @@
       counterEl.textContent = `${total} registro${total === 1 ? "" : "s"}`;
       emptyEl.classList.toggle("hidden", total > 0);
       tbody.innerHTML = pageRows.map(r => (
-        `<tr>${columns.map(c => `<td>${escapeHTML(r[c] ?? "—") || "—"}</td>`).join("")}` +
-        `<td><button class="row-btn" data-id="${r.id}">Ver</button></td></tr>`
+        `<tr data-id="${r.id}" class="clickable-row row-open" tabindex="0" role="button" aria-label="Ver detalle">` +
+        columns.map(c => {
+          const val = escapeHTML(r[c] ?? "—") || "—";
+          return c === "name"
+            ? `<td><button type="button" class="link-name row-open" data-id="${r.id}">${val}</button></td>`
+            : `<td>${val}</td>`;
+        }).join("") +
+        `<td><button class="row-btn row-open" data-id="${r.id}">Ver</button></td></tr>`
       )).join("");
 
       $$("th", tableEl).forEach(th => {
@@ -233,9 +252,19 @@
     });
 
     tbody.addEventListener("click", (e) => {
-      const btn = e.target.closest(".row-btn");
-      if (!btn) return;
-      const id = Number(btn.dataset.id);
+      const trigger = e.target.closest(".row-open");
+      if (!trigger) return;
+      const tr = e.target.closest("tr[data-id]");
+      const id = Number(trigger.dataset.id || (tr && tr.dataset.id));
+      const item = state.data.find(r => r.id === id);
+      if (item) onView(item);
+    });
+    tbody.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      const tr = e.target.closest("tr[data-id]");
+      if (!tr || e.target.tagName === "BUTTON") return;
+      e.preventDefault();
+      const id = Number(tr.dataset.id);
       const item = state.data.find(r => r.id === id);
       if (item) onView(item);
     });

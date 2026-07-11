@@ -297,6 +297,15 @@ input:focus, select:focus, textarea:focus {
 .data-table tbody tr:hover { background: var(--surface-2); }
 .row-btn { color: var(--primary-strong); font-weight: 600; padding: 4px 8px; border-radius: 6px; }
 .row-btn:hover { background: color-mix(in oklab, var(--primary) 15%, transparent); }
+.link-name {
+  background: none; border: 0; padding: 0; margin: 0;
+  color: var(--primary-strong); font: inherit; font-weight: 600;
+  text-align: left; cursor: pointer; text-decoration: none;
+}
+.link-name:hover { text-decoration: underline; }
+.clickable-row:hover { background: color-mix(in oklab, var(--primary) 6%, transparent); }
+.clickable-row { cursor: pointer; }
+.clickable-row:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 
 .empty { text-align: center; padding: 24px; color: var(--muted); }
 
@@ -383,3 +392,30 @@ input:focus, select:focus, textarea:focus {
   .auth-card { padding: 20px; }
   .brand { font-size: 22px; }
 }
+
+/* ---------- Paginación ---------- */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 4px 4px;
+  flex-wrap: wrap;
+}
+.pager button {
+  min-width: 38px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.pager button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.pager .pager-info {
+  font-size: 0.9rem;
+  opacity: 0.85;
+  padding: 0 8px;
+}
+.pager.hidden { display: none; }
