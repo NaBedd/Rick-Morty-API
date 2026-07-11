@@ -98,61 +98,39 @@
 
   // ---------- Data layer ----------
   const API = "https://rickandmortyapi.com/api";
-  // Trae la primera página y, en paralelo, el resto. Mucho más rápido que
-  // encadenar next → next → next secuencialmente (que causaba timeouts en la
-  // primera carga con ~42 páginas de personajes).
   const fetchJson = async (url) => {
     const res = await fetch(url);
+    if (res.status === 404) return { results: [], info: { pages: 0, count: 0 } };
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   };
-  const fetchAllPages = async (endpoint, onFirstPage) => {
-    if (!isOnline()) throw new Error("Sin conexión");
-    const first = await fetchJson(`${API}/${endpoint}?page=1`);
-    const results = [...(first.results || [])];
-    const totalPages = first.info?.pages || 1;
-    if (typeof onFirstPage === "function") onFirstPage(results.slice());
-    if (totalPages <= 1) return results;
-    const rest = await Promise.all(
-      Array.from({ length: totalPages - 1 }, (_, i) =>
-        fetchJson(`${API}/${endpoint}?page=${i + 2}`).then(d => d.results || []),
-      ),
-    );
-    for (const chunk of rest) results.push(...chunk);
-    return results;
-  };
-  const mergeWithLocalEdits = (localList, apiList) => {
-    const editedById = new Map((localList || []).filter(r => r.__edited).map(r => [r.id, r]));
-    return apiList.map(item => editedById.get(item.id) || item);
-  };
-  // callback opcional para refrescar la tabla cuando la actualización de fondo termina
-  const loadDataset = async (key, endpoint, onRefresh) => {
-    const cached = store.get(key);
-    if (cached?.length) {
-      if (isOnline()) {
-        fetchAllPages(endpoint).then(fresh => {
-          const merged = mergeWithLocalEdits(cached, fresh);
-          store.set(key, merged);
-          if (typeof onRefresh === "function") onRefresh(merged);
-        }).catch(() => {});
-      }
-      return cached;
-    }
-    if (!isOnline()) throw new Error("Sin conexión y sin datos en caché.");
-    // Render inmediato con la primera página; el resto llega en segundo plano.
-    const fresh = await fetchAllPages(endpoint, (partial) => {
-      if (typeof onRefresh === "function") onRefresh(partial);
-    });
-    store.set(key, fresh);
-    return fresh;
+  // Fetch bajo demanda: solo la página que el usuario está viendo. La búsqueda
+  // usa el endpoint del servidor (?name=) para cubrir TODO el dataset sin
+  // descargarlo entero. Se cachea lo que se va viendo para modo offline y para
+  // preservar ediciones locales.
+  const fetchPage = async (endpoint, page, query) => {
+    const qs = new URLSearchParams({ page: String(page) });
+    if (query) qs.set("name", query);
+    return fetchJson(`${API}/${endpoint}/?${qs.toString()}`);
   };
 
   // ---------- Table controller ----------
   const createTable = ({
-    tableEl, searchEl, counterEl, columns, searchField, storageKey, onView,
+    tableEl, searchEl, counterEl, columns, endpoint, storageKey, onView,
   }) => {
     const PAGE_SIZE = 20;
-    const state = { data: [], sortKey: null, sortDir: 1, query: "", page: 1 };
+    const state = {
+      cache: store.get(storageKey, []) || [],
+      rows: [],
+      sortKey: null,
+      sortDir: 1,
+      query: "",
+      page: 1,
+      totalPages: 1,
+      totalCount: 0,
+      loading: false,
+      reqId: 0,
+    };
     const tbody = tableEl.querySelector("tbody");
     const emptyEl = tableEl.parentElement.querySelector("[data-empty]");
 
@@ -174,9 +152,23 @@
     }
     const pgInfo = pagerEl.querySelector("[data-pg-info]");
 
+    const applyLocalEdits = (items) => {
+      const edited = new Map(state.cache.filter(r => r.__edited).map(r => [r.id, r]));
+      return items.map(it => edited.get(it.id) || it);
+    };
+    const mergeIntoCache = (items) => {
+      const byId = new Map(state.cache.map(r => [r.id, r]));
+      for (const it of items) {
+        const existing = byId.get(it.id);
+        if (existing?.__edited) continue;
+        byId.set(it.id, it);
+      }
+      state.cache = Array.from(byId.values());
+      store.set(storageKey, state.cache);
+    };
+
     const render = () => {
-      const q = state.query.trim().toLowerCase();
-      let rows = q ? state.data.filter(r => String(r[searchField] ?? "").toLowerCase().includes(q)) : state.data.slice();
+      let rows = state.rows.slice();
       if (state.sortKey) {
         const k = state.sortKey, dir = state.sortDir;
         rows.sort((a, b) => {
@@ -185,16 +177,24 @@
           return String(av ?? "").localeCompare(String(bv ?? ""), undefined, { numeric: true, sensitivity: "base" }) * dir;
         });
       }
-      const total = rows.length;
-      const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-      if (state.page > totalPages) state.page = totalPages;
-      if (state.page < 1) state.page = 1;
-      const start = (state.page - 1) * PAGE_SIZE;
-      const pageRows = rows.slice(start, start + PAGE_SIZE);
+      const total = state.totalCount;
+      const totalPages = state.totalPages;
 
-      counterEl.textContent = `${total} registro${total === 1 ? "" : "s"}`;
-      emptyEl.classList.toggle("hidden", total > 0);
-      tbody.innerHTML = pageRows.map(r => (
+      counterEl.textContent = state.loading
+        ? "Cargando…"
+        : `${total} registro${total === 1 ? "" : "s"}`;
+      emptyEl.classList.toggle("hidden", rows.length > 0 || state.loading);
+      // Mensaje contextual: en offline la búsqueda solo cubre lo ya cargado
+      if (rows.length === 0 && !state.loading) {
+        if (!isOnline()) {
+          emptyEl.innerHTML = state.query.trim()
+            ? `Sin resultados para <strong>“${escapeHTML(state.query.trim())}”</strong> en los datos cargados.<br><small>Modo sin conexión: la búsqueda solo abarca los registros previamente descargados.</small>`
+            : `Sin datos en caché.<br><small>Conéctate para descargar registros.</small>`;
+        } else {
+          emptyEl.textContent = "Sin resultados.";
+        }
+      }
+      tbody.innerHTML = rows.map(r => (
         `<tr data-id="${r.id}" class="clickable-row row-open" tabindex="0" role="button" aria-label="Ver detalle">` +
         columns.map(c => {
           const val = escapeHTML(r[c] ?? "—") || "—";
@@ -211,7 +211,7 @@
       });
 
       // Actualiza controles de paginación
-      pagerEl.classList.toggle("hidden", total === 0);
+      pagerEl.classList.toggle("hidden", total === 0 || totalPages <= 1);
       pgInfo.textContent = `Página ${state.page} de ${totalPages} · ${PAGE_SIZE}/pág`;
       pagerEl.querySelector('[data-pg="first"]').disabled = state.page <= 1;
       pagerEl.querySelector('[data-pg="prev"]').disabled  = state.page <= 1;
@@ -219,12 +219,58 @@
       pagerEl.querySelector('[data-pg="last"]').disabled  = state.page >= totalPages;
     };
 
+    const loadFromCache = () => {
+      const q = state.query.trim().toLowerCase();
+      const filtered = q
+        ? state.cache.filter(r => String(r.name ?? "").toLowerCase().includes(q))
+        : state.cache.slice();
+      state.totalCount = filtered.length;
+      state.totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+      if (state.page > state.totalPages) state.page = state.totalPages;
+      if (state.page < 1) state.page = 1;
+      const start = (state.page - 1) * PAGE_SIZE;
+      state.rows = filtered.slice(start, start + PAGE_SIZE);
+    };
+
+    const load = async () => {
+      const myReq = ++state.reqId;
+      if (!isOnline()) {
+        loadFromCache();
+        render();
+        return;
+      }
+      state.loading = true;
+      render();
+      try {
+        const data = await fetchPage(endpoint, state.page, state.query.trim());
+        if (myReq !== state.reqId) return; // petición desactualizada
+        const results = data.results || [];
+        mergeIntoCache(results);
+        state.rows = applyLocalEdits(results);
+        state.totalPages = data.info?.pages || 1;
+        state.totalCount = data.info?.count || 0;
+        if (state.totalCount === 0) {
+          state.page = 1;
+          state.totalPages = 1;
+        }
+      } catch (err) {
+        if (myReq !== state.reqId) return;
+        // Fallback a caché si la red falla
+        loadFromCache();
+        toast("Error de red, usando datos en caché.", 2500);
+      } finally {
+        if (myReq === state.reqId) {
+          state.loading = false;
+          render();
+        }
+      }
+    };
+
     tableEl.querySelectorAll("th[data-sort]").forEach(th => {
       th.addEventListener("click", () => {
         const k = th.dataset.sort;
         if (state.sortKey === k) state.sortDir *= -1;
         else { state.sortKey = k; state.sortDir = 1; }
-        state.page = 1;
         render();
       });
     });
@@ -232,23 +278,19 @@
     let searchT;
     searchEl.addEventListener("input", (e) => {
       clearTimeout(searchT);
-      searchT = setTimeout(() => { state.query = e.target.value; state.page = 1; render(); }, 120);
+      searchT = setTimeout(() => { state.query = e.target.value; state.page = 1; load(); }, 250);
     });
 
     pagerEl.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-pg]");
       if (!btn || btn.disabled) return;
-      const total = (() => {
-        const q = state.query.trim().toLowerCase();
-        return q ? state.data.filter(r => String(r[searchField] ?? "").toLowerCase().includes(q)).length : state.data.length;
-      })();
-      const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      const totalPages = state.totalPages;
       const action = btn.dataset.pg;
       if (action === "first") state.page = 1;
       else if (action === "prev") state.page = Math.max(1, state.page - 1);
       else if (action === "next") state.page = Math.min(totalPages, state.page + 1);
       else if (action === "last") state.page = totalPages;
-      render();
+      load();
     });
 
     tbody.addEventListener("click", (e) => {
@@ -256,7 +298,7 @@
       if (!trigger) return;
       const tr = e.target.closest("tr[data-id]");
       const id = Number(trigger.dataset.id || (tr && tr.dataset.id));
-      const item = state.data.find(r => r.id === id);
+      const item = state.rows.find(r => r.id === id) || state.cache.find(r => r.id === id);
       if (item) onView(item);
     });
     tbody.addEventListener("keydown", (e) => {
@@ -265,16 +307,19 @@
       if (!tr || e.target.tagName === "BUTTON") return;
       e.preventDefault();
       const id = Number(tr.dataset.id);
-      const item = state.data.find(r => r.id === id);
+      const item = state.rows.find(r => r.id === id) || state.cache.find(r => r.id === id);
       if (item) onView(item);
     });
 
     return {
-      setData(data) { state.data = data || []; state.page = 1; render(); },
+      reload() { load(); },
       update(item) {
-        const i = state.data.findIndex(r => r.id === item.id);
-        if (i >= 0) state.data[i] = { ...item, __edited: true };
-        store.set(storageKey, state.data);
+        const edited = { ...item, __edited: true };
+        const i = state.rows.findIndex(r => r.id === item.id);
+        if (i >= 0) state.rows[i] = edited;
+        const j = state.cache.findIndex(r => r.id === item.id);
+        if (j >= 0) state.cache[j] = edited; else state.cache.push(edited);
+        store.set(storageKey, state.cache);
         render();
       },
     };
@@ -401,7 +446,7 @@
       searchEl: $("#searchCharacters"),
       counterEl: $("#counterCharacters"),
       columns: ["id", "name", "species", "gender", "type"],
-      searchField: "name",
+      endpoint: "character",
       storageKey: K.characters,
       onView: (c) => {
         openModal(`Personaje · ${c.name}`, characterDetail(c));
@@ -421,7 +466,7 @@
       searchEl: $("#searchEpisodes"),
       counterEl: $("#counterEpisodes"),
       columns: ["id", "name", "air_date", "episode"],
-      searchField: "name",
+      endpoint: "episode",
       storageKey: K.episodes,
       onView: (ep) => {
         openModal(`Episodio · ${ep.name}`, episodeDetail(ep));
@@ -436,16 +481,8 @@
       },
     });
 
-    try {
-      const [chars, eps] = await Promise.all([
-        loadDataset(K.characters, "character", (fresh) => charactersTable.setData(fresh)),
-        loadDataset(K.episodes, "episode", (fresh) => episodesTable.setData(fresh)),
-      ]);
-      charactersTable.setData(chars);
-      episodesTable.setData(eps);
-    } catch (err) {
-      toast("Error cargando datos: " + err.message, 3500);
-    }
+    charactersTable.reload();
+    episodesTable.reload();
 
     // Header actions
     $("#themeToggle").addEventListener("click", toggleTheme);
@@ -468,21 +505,11 @@
       store.set(K.fakeOffline, now);
       updateNet();
       toast(now ? "Modo offline simulado activado" : "Conexión restaurada");
-      // Al reconectar, refresca datos en segundo plano
-      if (!now && navigator.onLine) {
-        fetchAllPages("character").then(fresh => {
-          const merged = mergeWithLocalEdits(store.get(K.characters, []), fresh);
-          store.set(K.characters, merged);
-          charactersTable.setData(merged);
-        }).catch(() => {});
-        fetchAllPages("episode").then(fresh => {
-          const merged = mergeWithLocalEdits(store.get(K.episodes, []), fresh);
-          store.set(K.episodes, merged);
-          episodesTable.setData(merged);
-        }).catch(() => {});
-      }
+      // Re-consulta la página actual según el nuevo estado de red
+      charactersTable.reload();
+      episodesTable.reload();
     });
-    window.addEventListener("online", updateNet);
+    window.addEventListener("online", () => { updateNet(); charactersTable.reload(); episodesTable.reload(); });
     window.addEventListener("offline", updateNet);
     updateNet();
   };
